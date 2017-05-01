@@ -6,11 +6,6 @@ import os as _os
 from random import randint as _rand
 from subprocess import check_output as _check_output
 
-from multiprocessing import Pool as _Pool
-from multiprocessing import cpu_count as _cpu_count
-
-from numpy import array_split as _array_split
-
 from tqdm import tqdm as _tqdm
 
 import sqlalchemy as sa
@@ -105,7 +100,7 @@ class DB(object):
                 .filter(self.Info.name == 'length')
                 .first()[0]
             )
-        return self._length
+        return abs(int(self._length))
 
     def __repr__(self):
         """String representation of DB."""
@@ -119,7 +114,7 @@ class DB(object):
         """Create a pre-initialized query."""
         if not args:
             args = (self.Row,)
-        session = self.get_session()
+        session = self.session()
         return session.query(*args, **kwargs)
 
     def random(self, count=1, as_df=False):
@@ -134,7 +129,47 @@ class DB(object):
         else:
             return q.all()
 
-    def lookup_rsids(self, rsids: list([str])) -> list([Row]):
+    def between(self, locations, snps_only=False):
+        """Return all recordss in a given window.
+
+        Parameters
+        ----------
+        locations : dict
+            {chrom: (start, end)}
+        snps_only : bool
+            Filter out anything longer that 1 base
+
+        Returns
+        -------
+        list
+            A list of DB.Row objects
+
+        Example
+        -------
+        >>> db.between({'chr6':  (116671802, 116671840),
+                        'chr17': (71026530, 71026540)})
+        [rs951565928<chr6:116671802-116671803>,
+         rs756327030<chr6:116671836-116671837>,
+         rs375317044<chr6:116671837-116671838>,
+         rs148440225<chr17:71026531-71026532>,
+         rs781305685<chr17:71026539-71026540>,
+        """
+        if not isinstance(locations, dict):
+            raise ValueError('locations must be a dictionary, is {}'
+                             .format(type(locations)))
+
+        results = []
+        for chrom in sorted(locations.keys(), key=chrom_key):
+            start, end = locations[chrom]
+            results += self.query().filter(
+                self.Row.chrom == chrom
+            ).filter(
+                self.Row.start.between(start, end)
+            ).all()
+
+        return results
+
+    def lookup_rsids(self, rsids):
         """Return either one row or a list of rows by rsID.
 
         Parameters
@@ -153,7 +188,7 @@ class DB(object):
             assert i.startswith('rs')
         return self.query().filter(self.Row.name.in_(rsids)).all()
 
-    def lookup_location(self, chrom: str, start: int, end: int=None) -> Row:
+    def lookup_location(self, chrom, start, end=None):
         """Return a row by location.
 
         Only does one at a time, optimized for speed.
@@ -186,7 +221,7 @@ class DB(object):
         query = query.with_hint(self.Row, 'USE INDEX chrom_start_index')
         return query.first()
 
-    def lookup_locations(self, locs: dict(str=list)) -> list:
+    def lookup_locations(self, locs):
         """Return a row by location.
 
         One query for every chromosome.
@@ -247,45 +282,20 @@ class DB(object):
         # Create db tables, must be deleted first
         self.Base.metadata.create_all(self.engine)
 
-    def build_db(self, f, commit_every=1000000):
-        """Initialize the database, must exist already.
 
-        Args:
-            f (str): File to read.
-            commit_every (int): How many rows to wait before commiting.
-        """
-        rows    = 0
-        count   = commit_every
-        dbsnp   = self.Row.__table__
-        insert  = dbsnp.insert()
+def chrom_key(chrom):
+    """Use with sorted: return integer representation of chromosome."""
+    if chrom.startswith('chr'):
+        chrom = chrom[3:]
+    if chrom.upper() == 'X':
+        return 99
+    elif chrom.upper() == 'Y':
+        return 100
+    elif chrom.upper().startswith('M'):
+        return 101
+    else:
+        try:
+            return int(chrom)
+        except ValueError:
+            return chrom
 
-        db_len  = int(
-            _check_output('wc -l {}'.format(f), shell=True)
-            .decode().strip().split(' ')[0]
-        )
-        conn = self.engine.connect()
-        records = []
-        with open(f) as fin, _tqdm(unit='rows', total=db_len) as pbar:
-            for line in fin:
-                if line.startswith('track'):
-                    continue
-                chrom, start, end, name, _, strand = line.rstrip().split('\t')
-                records.append(
-                    {'name': name, 'chrom': chrom, 'start': start,
-                     'end': end, 'strand': strand}
-                )
-                if count:
-                    count -= 1
-                else:
-                    pbar.write('Writing {} records...'.format(commit_every))
-                    pbar.update(0)
-                    conn.execute(insert, records)
-                    pbar.write('Written, {} complete'.format(rows))
-                    count = commit_every-1
-                    records = []
-                rows += 1
-                pbar.update()
-        print('Writing final rows')
-        conn.execute(insert, records)
-        conn.close()
-        print('Done, {} rows written'.format(rows))

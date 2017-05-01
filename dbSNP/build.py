@@ -1,18 +1,31 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Build the database without sqlalchemy for speed.
+Build the database without SQLAlchemy for speed.
+
+Example
+-------
+>>> import dbSNP
+>>> db = dbSNP.DB('/path/to/db', version=142)
+>>> db.inititialize_db()
+>>> for bed_file in [os.path.join(os.abspath('.'), i)
+                     for i in os.listdir('.') if i.endswith('.bed')]:
+        dbSNP.build_db('/path/to/db/dbSNP142.db', bed_file)
 """
 import sqlite3
 from subprocess import check_output as _check_output
 from tqdm import tqdm
 
+
 def build_db(db, f, commit_every=1000000):
     """Initialize the database, must exist already.
 
-    Args:
-        f (str): File to read.
-        commit_every (int): How many rows to wait before commiting.
+    Parameters
+    ----------
+    f : str
+        File to read.
+    commit_every : int, optional
+        How many rows to wait before commiting.
     """
     rows    = 0
     count   = commit_every
