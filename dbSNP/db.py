@@ -38,6 +38,15 @@ class DB(object):
 
         sa.Index('chrom_start_index', chrom, start)
 
+        @property
+        def length(self):
+            """Calculate the length of self."""
+            return self.end - self.start
+
+        def __len__(self):
+            """Return the length of self."""
+            return self.length
+
         def __repr__(self):
             """Display simple information about the row."""
             return '{name}<{chrom}:{start}-{end}>'.format(
@@ -250,14 +259,15 @@ class DB(object):
         locs = c
 
         results = []
-        for chrom in locs:
-            query =  self.query().filter(
-                self.Row.chrom == chrom
-            ).filter(
-                self.Row.start.in_(locs[chrom])
-            )
-            query = query.with_hint(self.Row, 'USE INDEX chrom_start_index')
-            results += query.all()
+        for chrom, starts in locs.items():
+            for chunk in [starts[i:i + 990] for i in range(0, len(starts), 990)]:
+                query =  self.query().filter(
+                    self.Row.chrom == chrom
+                ).filter(
+                    self.Row.start.in_(chunk)
+                )
+                query = query.with_hint(self.Row, 'USE INDEX chrom_start_index')
+                results += query.all()
         return results
 
     def initialize_db(self):
